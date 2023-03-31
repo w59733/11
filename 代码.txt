@@ -1,0 +1,519 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © BarefootJoey
+
+// ██████████████████████████████████████████████████████████████████████
+// █▄─▄─▀██▀▄─██▄─▄▄▀█▄─▄▄─█▄─▄▄─█─▄▄─█─▄▄─█─▄─▄─███▄─▄█─▄▄─█▄─▄▄─█▄─█─▄█
+// ██─▄─▀██─▀─███─▄─▄██─▄█▀██─▄███─██─█─██─███─███─▄█─██─██─██─▄█▀██▄─▄██
+// █▄▄▄▄██▄▄█▄▄█▄▄█▄▄█▄▄▄▄▄█▄▄▄███▄▄▄▄█▄▄▄▄██▄▄▄██▄▄▄███▄▄▄▄█▄▄▄▄▄██▄▄▄██
+
+//@version=5
+indicator("Haydens RSI Trend Trader", overlay = true)
+
+// ---------------------------- Theme --------------------------------------- //
+// Colors
+red = color.red
+green = color.green
+brightred = #ff1100
+brightgreen = #00ff0a
+cautioncol = color.yellow
+gray= color.gray
+aqua = color.aqua
+orange= color.orange
+darkgreen = #1b5e20
+darkred = #801922
+
+// Groups 
+grma = "📈 Moving Averages 📈"
+grhts = "Triple Trend State"
+grt = "🎯 Targets 🎯"
+grll = "🩸 Leverage Liquidations 🩸"
+
+// Constants
+dataType = "Custom"
+instructions = "Off"
+smaS = "Off"
+constant = 1>0
+rsi=ta.rsi(close,14)
+
+// ------------------------- Trend State ------------------------------------ //
+// Code Author: © Koalafied_3
+showtrend = input(true, title='Show Hayden triple trend state H-line fill?',group=grhts, 
+  tooltip ="Check this box if you want to see the Bull, Bear, or Chop trend state background according to Hayden.\n(Page 56) 10 Lies That Traders Believe = The RSI is unable to indicate trend direction, because it's only a momentum indicator.")
+showbc = input(true, title='Show Hayden triple trend state Chart Bar Color?',group=grhts)
+ts1 = input.float(defval=67, title="Precise Bullish RSI Crossover 66 to 68", minval=66, maxval=68, step=0.001, group=grhts, tooltip="End of chop. Popular: 66, 66.666, or 67")
+ts2 = input.float(defval=33, title="Precise Bearish RSI Crossunder 32 to 34", minval=32, maxval=34, step=0.001, group=grhts, tooltip="End of chop. Popular: 34, 33.333, or 33")
+ts1a = input.float(defval=61, title="Precise Bullish RSI Crossover 60 to 62", minval=60, maxval=62, step=0.001, group=grhts, tooltip="End of bearish trend. Popular: 61, 60.618, 60.5, or 60")
+ts2a = input.float(defval=39, title="Precise Bearish RSI Crossunder 38 to 40", minval=38, maxval=40, step=0.001, group=grhts, tooltip="End of bullish trend. Popular: 39, 39.5, 39.618, or 40")
+// Trend State
+var state = 0
+if ta.crossover(rsi, ts1)
+    state := 1
+    state
+if ta.crossunder(rsi, ts2) 
+    state := 2
+    state
+state := state
+
+//-----------------3 State RSI Gradient Bar Color on Chart--------------------//
+cbullu = input(brightgreen, "Chart BarColor: Bull Run", group=grhts)
+cbulld = input(darkgreen, "Chart BarColor: Bull Pullback", group=grhts)
+cbearu = input(brightred, "Chart BarColor: Bear Run", group=grhts)
+cbeard = input(darkred, "Chart BarColor: Bear Pullback", group=grhts)
+cbearc = input(brightgreen, "Chart BarColor: Bull Chop", group=grhts) 
+cbullc = input(brightred, "Chart BarColor: Bear Chop", group=grhts) 
+
+barcolor(state==1 and rsi>50?cbullu: state==1 and rsi<50?cbulld: state==2 and rsi<50 ?cbearu: state==2 and rsi>50 ?cbeard:color.new(color.from_gradient(rsi, ts2, ts1, cbearu, cbullu),0),title="Chart Bar Color", display = showbc ? display.all : display.none, editable=false)
+
+// RSI 50 Line
+// @ LazyBear
+obLevelM = 50
+src = close
+length = 14
+ep = 2 * length - 1
+auc = ta.ema(math.max(src - src[1], 0), ep)
+adc = ta.ema(math.max(src[1] - src, 0), ep)
+
+x7 = (length - 1) * (adc * obLevelM / (100 - obLevelM) - auc)
+ub4 = x7 >= 0 ? src + x7 : src + x7 * (100 - obLevelM) / obLevelM
+plot(ub4, title='Midline', color=color.new(ub4>ub4[1]?color.green:ub4<ub4[1]?color.red:color.gray, 25), linewidth=1)
+
+// ---------------------------- Trade Setup --------------------------------- //
+// Inspired by @ KioseffTrading
+lot_size = input.float(1, 'Lot Size', minval=0, group=grt, step=0.001)
+dcaorstop = input.string("Stop", "DCA 3 or Stop", options=["DCA 3", "Stop"], group=grt)
+// Number of Decimals for Labels
+pricedecimals= input.int(defval=2, title='Number of Price Decimals', minval=0, maxval=10, group=grt)
+truncateprice(number, pricedecimals) =>
+    factor = math.pow(10, pricedecimals)
+    int(number * factor) / factor
+
+// Define a bull/bear cross
+bullcross= state==1 and state[1]==2
+bearcross= state==2 and state[1]==1
+
+// Detect what was last signal (long or short)
+long_short = 0
+long_last = bullcross and (nz(long_short[1]) == 0 or nz(long_short[1]) == -1)
+short_last = bearcross and (nz(long_short[1]) == 0 or nz(long_short[1]) == 1)
+long_short := long_last ? 1 : short_last ? -1 : long_short[1]
+
+// Remove first bar for SL/TP (you can't enter a trade at bar close and THEN hit your SL on that same bar)
+longBar1 = ta.barssince(long_last)
+longBar2 = longBar1 >= 1 ? true : false
+shortBar1 = ta.barssince(short_last)
+shortBar2 = shortBar1 >= 1 ? true : false
+
+// Wen entry, sir?
+bullentry = ta.valuewhen(bullcross, close, 0) 
+bearentry = ta.valuewhen(bearcross, close, 0) 
+entin= state==1 and long_short==1?bullentry:state==2 and long_short==-1?bearentry:na
+entout=plot(entin, 'Entry', color=color.new(color.gray, 0), style=plot.style_circles, editable=false)
+
+// Targets
+// ATR TP & SL
+srcATR = input(title='ATR Source', defval=close, group=grt)
+atrPeriod = input.int(title='ATR Period', defval=233, minval=1, group=grt)
+per = atrPeriod
+atrMultiplier = input.float(title='ATR Multiplier', defval=10, group=grt)
+
+atr = ta.atr(atrPeriod)
+ATRupper=srcATR + atr * atrMultiplier
+ATRlower=srcATR - atr * atrMultiplier
+ATRupper2=srcATR + atr * (atrMultiplier*0.854)
+ATRlower2=srcATR - atr * (atrMultiplier*0.854)
+ATRupper3=srcATR + atr * (atrMultiplier*0.763)
+ATRlower3=srcATR - atr * (atrMultiplier*0.763)
+ATRupper4=srcATR + atr * (atrMultiplier*0.618)
+ATRlower4=srcATR - atr * (atrMultiplier*0.618)
+ATRupper5=srcATR + atr * (atrMultiplier*0.5)
+ATRlower5=srcATR - atr * (atrMultiplier*0.5)
+ATRupper6=srcATR + atr * (atrMultiplier*0.382)
+ATRlower6=srcATR - atr * (atrMultiplier*0.382)
+ATRupper7=srcATR + atr * (atrMultiplier*0.236)
+ATRlower7=srcATR - atr * (atrMultiplier*0.236)
+ATRupper8=srcATR + atr * (atrMultiplier*0.146)
+ATRlower8=srcATR - atr * (atrMultiplier*0.146)
+bearse=srcATR + atr * (atrMultiplier*0.146)
+bullse=srcATR - atr * (atrMultiplier*0.146)
+bearse2=srcATR + atr * (atrMultiplier*0.236)
+bullse2=srcATR - atr * (atrMultiplier*0.236)
+bearse3=srcATR + atr * (atrMultiplier*0.382)
+bullse3=srcATR - atr * (atrMultiplier*0.382)
+
+ATRbulltp1=ta.valuewhen(bullcross,ATRupper,0)
+ATRbeartp1=ta.valuewhen(bearcross,ATRlower,0)
+ATRbulltp2=ta.valuewhen(bullcross,ATRupper2,0)
+ATRbeartp2=ta.valuewhen(bearcross,ATRlower2,0)
+ATRbulltp3=ta.valuewhen(bullcross,ATRupper3,0)
+ATRbeartp3=ta.valuewhen(bearcross,ATRlower3,0)
+ATRbulltp4=ta.valuewhen(bullcross,ATRupper4,0)
+ATRbeartp4=ta.valuewhen(bearcross,ATRlower4,0)
+ATRbulltp5=ta.valuewhen(bullcross,ATRupper5,0)
+ATRbeartp5=ta.valuewhen(bearcross,ATRlower5,0)
+ATRbulltp6=ta.valuewhen(bullcross,ATRupper6,0)
+ATRbeartp6=ta.valuewhen(bearcross,ATRlower6,0)
+ATRbulltp7=ta.valuewhen(bullcross,ATRupper7,0)
+ATRbeartp7=ta.valuewhen(bearcross,ATRlower7,0)
+ATRbulltp8=ta.valuewhen(bullcross,ATRupper8,0)
+ATRbeartp8=ta.valuewhen(bearcross,ATRlower8,0)
+vwbearse=ta.valuewhen(bearcross,bearse,0)
+vwbullse=ta.valuewhen(bullcross,bullse,0)
+vwbearse2=ta.valuewhen(bearcross,bearse2,0)
+vwbullse2=ta.valuewhen(bullcross,bullse2,0)
+vwbearse3=ta.valuewhen(bearcross,bearse3,0)
+vwbullse3=ta.valuewhen(bullcross,bullse3,0)
+
+bgrad = 80
+tgrad = 95
+
+exin = state==1 and long_short==1?ATRbulltp1:state==2 and long_short==-1?ATRbeartp1:na
+excol = long_short == 1 and close<ATRbulltp1?green: long_short==-1 and close>ATRbeartp1?red:color.gray
+exout = plot(exin, 'TP 8', color=color.new(excol, 0), style=plot.style_circles, editable=false)
+fill(entout,exout,exin,long_short==1?bullentry:long_short==-1?bearentry:na, top_color=color.new(long_short==1?darkgreen:long_short==-1?darkred:na,bgrad), bottom_color=color.new(long_short==1?darkgreen:long_short==-1?darkred:na,tgrad))
+tp2out = state==1 and long_short==1?ATRbulltp2:state==2 and long_short==-1?ATRbeartp2:na
+tp2col = long_short == 1 and close<ATRbulltp2?green: long_short==-1 and close>ATRbeartp2?red:color.gray
+plot(tp2out, "TP 7", color=color.new(tp2col,10), style=plot.style_circles, show_last=1, editable=false)
+tp3out = state==1 and long_short==1?ATRbulltp3:state==2 and long_short==-1?ATRbeartp3:na
+tp3col = long_short == 1 and close<ATRbulltp3?green: long_short==-1 and close>ATRbeartp3?red:color.gray
+plot(tp3out, "TP 6", color=color.new(tp3col,20), style=plot.style_circles, show_last=1, editable=false)
+tp4out = state==1 and long_short==1?ATRbulltp4:state==2 and long_short==-1?ATRbeartp4:na
+tp4col = long_short == 1 and close<ATRbulltp4?green: long_short==-1 and close>ATRbeartp4?red:color.gray
+plot(tp4out, "TP 5", color=color.new(tp4col,30), style=plot.style_circles, show_last=1, editable=false)
+tp5out = state==1 and long_short==1?ATRbulltp5:state==2 and long_short==-1?ATRbeartp5:na
+tp5col = long_short == 1 and close<ATRbulltp5?green: long_short==-1 and close>ATRbeartp5?red:color.gray
+plot(tp5out, "TP 4", color=color.new(tp5col,40), style=plot.style_circles, show_last=1, editable=false)
+tp6out = state==1 and long_short==1?ATRbulltp6:state==2 and long_short==-1?ATRbeartp6:na
+tp6col = long_short == 1 and close<ATRbulltp6?green: long_short==-1 and close>ATRbeartp6?red:color.gray
+plot(tp6out, "TP 3", color=color.new(tp6col,50), style=plot.style_circles, show_last=1, editable=false)
+tp7out = state==1 and long_short==1?ATRbulltp7:state==2 and long_short==-1?ATRbeartp7:na
+tp7col = long_short == 1 and close<ATRbulltp7?green: long_short==-1 and close>ATRbeartp7?red:color.gray
+plot(tp7out, "TP 2", color=color.new(tp7col,60), style=plot.style_circles, show_last=1, editable=false)
+tp8out = state==1 and long_short==1?ATRbulltp8:state==2 and long_short==-1?ATRbeartp8:na
+tp8col = long_short == 1 and close<ATRbulltp8?green: long_short==-1 and close>ATRbeartp8?red:color.gray
+plot(tp8out, "TP 1", color=color.new(tp8col,60), style=plot.style_circles, show_last=1, editable=false)
+
+dca1in=state==1 and long_short==1?vwbullse:state==2 and long_short==-1?vwbearse:na
+dca1out=plot(dca1in, "DCA/Stop 1", color=color.new(color.gray, 40), style=plot.style_circles, show_last=1, editable=false)
+dca2in=state==1 and long_short==1?vwbullse2:state==2 and long_short==-1?vwbearse2:na
+dca2out=plot(dca2in, "DCA/Stop 2", color=color.new(color.gray, 20), style=plot.style_circles, show_last=1, editable=false)
+dca3in=state==1 and long_short==1?vwbullse3:state==2 and long_short==-1?vwbearse3:na
+dca3out=plot(dca3in, "DCA/Stop 3", color=color.new(color.gray, 0), style=plot.style_circles, editable=false)
+fill(entout,dca3out,long_short==1?vwbullse3:long_short==-1?vwbearse3:na,long_short==1?bullentry:long_short==-1?bearentry:na, top_color=color.new(gray,85), bottom_color=color.new(gray,tgrad))
+
+// Trade Setup Labels
+// Profit
+bullt1profit=(((ATRbulltp1/bullentry)- 1)*100)
+beart1profit=((1-(bearentry/ATRbeartp1))*-100)
+bullt2profit=(((ATRbulltp2/bullentry)- 1)*100)
+beart2profit=((1-(bearentry/ATRbeartp2))*-100)
+bullt3profit=(((ATRbulltp3/bullentry)- 1)*100)
+beart3profit=((1-(bearentry/ATRbeartp3))*-100)
+bullt4profit=(((ATRbulltp4/bullentry)- 1)*100)
+beart4profit=((1-(bearentry/ATRbeartp4))*-100)
+bullt5profit=(((ATRbulltp5/bullentry)- 1)*100)
+beart5profit=((1-(bearentry/ATRbeartp5))*-100)
+bullt6profit=(((ATRbulltp6/bullentry)- 1)*100)
+beart6profit=((1-(bearentry/ATRbeartp6))*-100)
+bullt7profit=(((ATRbulltp7/bullentry)- 1)*100)
+beart7profit=((1-(bearentry/ATRbeartp7))*-100)
+bullt8profit=(((ATRbulltp8/bullentry)- 1)*100)
+beart8profit=((1-(bearentry/ATRbeartp8))*-100)
+
+//-----------------------------Liquidation levels-----------------------------//
+// @ mabonyi
+i_show_x1 = input.bool(false, title='Show Liquidation Levels & Events? 🩸', group=grll)
+i_nonlinear = input.bool(false, title='Inverse/Non-linear Contract', group=grll, 
+  tooltip="A linear contract, which is a USDT-margined contract, uses USDT to make contract transactions with cryptocurrencies, and the underlying prices rise and fall linearly with revenue. Inverse/Non-linear contracts are a coin-margined contract. For example, in a BTC-margined contract, you must use Bitcoin as the underlying asset.")
+i_maintmargin = input.float(0.05,  title='Maintenance Margin above Liquidation', group=grll)
+maint_margin = 1 - i_maintmargin
+i_x1 = input.int(100, title='Leverage', minval=1, maxval=300, group=grll, tooltip="Leverage in X's. For example, if using 25x leverage, insert 25 here. Max leverage = 300x")
+i_showlast = 0
+i_offset = 0 
+i_label_offset = 0
+
+// Calculations
+f_leveraged(_price, _x) =>
+    _xlong = i_nonlinear ? _x + 1 : _x
+    _xshort = i_nonlinear ? _x - 1 : _x
+    _liq_long = _price * (1 - 1 / _xlong * maint_margin)
+    _liq_short = _price * (1 + 1 / _xshort * maint_margin)
+    [_liq_long, _liq_short]
+
+f_print(_y, _txt, _c) =>
+    t = time_close + (i_offset + i_label_offset) * timeframe.multiplier * 60 * 1000
+    var _lbl = label.new(t, _y, _txt, xloc.bar_time, yloc.price, color.white, label.style_none, _c, size.small)
+    label.set_xy(_lbl, t, _y)
+    label.set_text(_lbl, _txt)
+
+[x1_long, x1_short] = f_leveraged(close, i_x1)
+
+// Entry Liquidation Levels
+longLiquidation = ta.valuewhen(long_last, x1_long, 0)
+shortLiquidation = ta.valuewhen(short_last, x1_short, 0)
+// Liquidation Line Adaptive Coloring
+longliqlinecol = longLiquidation<vwbullse3 ? color.yellow:brightred
+shortliqlinecol = shortLiquidation>vwbearse3 ? color.yellow:brightred
+llcolout= long_short == 1 ? longliqlinecol : long_short==-1 ? shortliqlinecol : na
+// Liquidation Lines & Fill 
+llin=long_short == 1 and i_show_x1 ? longLiquidation : long_short == -1 and i_show_x1 ? shortLiquidation : na
+llout=plot(llin, style=plot.style_circles, color=color.new(llcolout, 0), linewidth=1, title='Liquidation Level', editable=false)
+liqfiltopcol=long_short==1 and longLiquidation < vwbullse3 ? color.new(color.yellow,85) : long_short==-1 and shortLiquidation > vwbearse3 ? color.new(color.yellow,90) : na
+liqfilbotcol=long_short==1 and longLiquidation < vwbullse3 ? color.new(color.yellow,97) : long_short==-1 and shortLiquidation > vwbearse3 ? color.new(color.yellow,98) : na
+fill(llout,dca3out, long_short==1?longLiquidation: long_short==-1?shortLiquidation: na, long_short==1?vwbullse3: long_short==-1?vwbearse3: na, top_color=liqfiltopcol, bottom_color=liqfilbotcol)
+liqtip2 = i_show_x1 ? str.tostring(truncateprice(llin, pricedecimals)) : "None"
+ // Liquidation Occured?
+longliqhit=(ta.crossunder(low, longLiquidation) or low<longLiquidation) and long_short==1 and i_show_x1
+shortliqhit=(ta.crossover(high, shortLiquidation) or high>shortLiquidation) and long_short==-1 and i_show_x1
+// Last Liquidations
+leverage= i_show_x1 ? i_x1 : 1
+lastlliq = "💯 Leverage: " + str.tostring(leverage) + "x\n🩸 Long Liquidation: " + str.tostring(truncateprice(longLiquidation, pricedecimals)) + "\n📅 Last Long Liquidation: " + str.tostring(ta.barssince(longliqhit[1])) + " candles"
+lastsliq = "💯 Leverage: " + str.tostring(leverage) + "x\n🩸 Short Liquidation: " + str.tostring(truncateprice(shortLiquidation, pricedecimals)) + "\n📅 Last Short Liquidation: " + str.tostring(ta.barssince(shortliqhit[1])) + " candles"
+// Liquidation Event
+var label liqhit = na
+if longliqhit and long_short==1 and i_show_x1
+    label.new(bar_index,low,yloc=yloc.belowbar,text='🩸',textcolor=color.gray, style=label.style_none, tooltip=lastlliq)
+if shortliqhit and long_short==-1 and i_show_x1
+    label.new(bar_index,high,yloc=yloc.abovebar,text='🩸',textcolor=color.gray, style=label.style_none, tooltip=lastsliq)
+
+// --------------------------------- Trade Labels --------------------------- //
+//-------------------- Backtesting 
+// @ Capissimo
+bidask = close 
+
+tbase = (time - time[1]) / 1000
+tcurr = (timenow - time_close[1]) / 1000
+barlife = tcurr / tbase
+
+var float start_long_trade = bidask
+var float long_trades = 0.
+var float start_short_trade = bidask
+var float short_trades = 0.
+var int wins = 0
+var int trade_count = 0
+
+longtphit = ta.crossover(high, ATRbulltp1) and longBar2
+longstophit = ta.crossunder(low, vwbullse3) and dcaorstop =="Stop" and longBar2
+shorttphit = ta.crossunder(low, ATRbeartp1) and shortBar2
+shortstophit = ta.crossover(high, vwbearse3) and dcaorstop =="Stop" and shortBar2
+
+if bullcross //enter bull
+    start_long_trade := bidask
+    start_long_trade
+if bearcross or (i_show_x1?longliqhit:na) or longtphit or (dcaorstop=="Stop"?longstophit:na)//exit bull
+    ldiff = bidask - start_long_trade // long profit in dollars
+    wins := ldiff > 0 ? 1 : 0
+    long_trades := ldiff * lot_size
+    trade_count := 1
+    trade_count
+if bearcross //enter bear
+    start_short_trade := bidask
+    start_short_trade
+if bullcross or (i_show_x1?shortliqhit:na) or shorttphit or (dcaorstop=="Stop"?shortstophit:na)//exitbear
+    sdiff = start_short_trade - bidask // short profit in dollars
+    wins := sdiff > 0 ? 1 : 0
+    short_trades := sdiff * lot_size
+    trade_count := 1
+    trade_count
+
+bullcprofit=((bidask-start_long_trade)/start_long_trade)
+bearcprofit=((start_short_trade-bidask)/start_short_trade)
+
+cumbull = ta.cum(long_trades)
+cumbear = ta.cum(short_trades)
+cumpbull = ta.cum(bullcprofit)
+cumpbear = ta.cum(bearcprofit)
+cumreturn = ta.cum(long_trades) + ta.cum(short_trades) // sum of both short profit and long profit in $
+cumpreturn = ta.cum(bullcprofit) + ta.cum(bearcprofit) // sum of both short profit and long profit in %
+totaltrades = ta.cum(trade_count) //# trades
+totalwins = ta.cum(wins)
+totallosses = totaltrades - totalwins == 0 ? 1 : totaltrades - totalwins
+avgreturn = cumreturn / totaltrades
+avgpreturn = cumpreturn / totaltrades
+avgbulltp = bullentry*(1+ta.valuewhen(bullcross,avgpreturn,0)) 
+avgbeartp = bearentry*(1-ta.valuewhen(bearcross,avgpreturn,0))
+avgtp = long_short==1?avgbulltp:long_short==-1?avgbeartp:na
+avgtpcol = long_short == 1 and avgtp>bullentry?green:long_short == 1 and avgtp<bullentry?red: long_short==-1 and avgtp<bearentry?red: long_short==-1 and avgtp>bearentry?red:na
+plot(avgtp, "Avg TP", color=color.new(avgtpcol,50), style=plot.style_circles)
+info =  "\n\n  📈 Cumulative Backtesting 📈" 
+  + '\nBull Profit: $ ' + str.tostring(cumbull, '#.##') +'\nBear Profit: $ ' + str.tostring(cumbear, '#.##') + '\nTotal Profit: $ ' + str.tostring(cumreturn, '#.##')  + '\nAverage Total Profit: $ ' + str.tostring(avgreturn, '#.##')
+  +  '\nBull Return: ' + str.tostring(cumpbull, '#.## %') +'\nBear Return: ' + str.tostring(cumpbear, '#.## %')  + '\nTotal Return: ' + str.tostring(cumpreturn, '#.## %') + '\nAverage Total Return: ' + str.tostring(avgpreturn, '#.## %') 
+  + '\nTotal Wins: ' + str.tostring(totalwins, '#') + '\nTotal Losses: ' + str.tostring(totallosses, '#') + '\n🚦 Total Trades: ' + str.tostring(totaltrades, '#') + '\nWins/Trades: ' + str.tostring(totalwins / totaltrades, '#.## %')
+
+// Crossover profit
+bullxprofit = (((close - bullentry)/bullentry)*100)
+bearxprofit = (((close - bearentry)/bearentry)*-100)
+curbullprof = close-bullentry
+curbearprof = bearentry-close
+tradelabsize = input.string(size.tiny, "Size", [size.tiny, size.small, size.normal, size.large, size.huge, size.auto], group=grt)
+tradetime = ta.barssince(bullcross or bearcross)
+
+// Plot Labels
+bullentrytt = "🚦 Entry: " + (long_short==1?"🟢 Long @ ":long_short==-1?" 🔴 Short @ ":na) + str.tostring(truncateprice(bullentry, pricedecimals)) 
+  + "\n🛑 DCA/Stop 3: " + str.tostring(truncateprice(dca3in, pricedecimals)) + "\n🩸 Liquidation: " + liqtip2 
+  + "\n🎯 Average Return Target: " + str.tostring(truncateprice(avgtp, pricedecimals)) + "\n🎯 Take Profit 8: " + str.tostring(truncateprice(exin, pricedecimals)) 
+  + "\n💸 Lot Size: " + str.tostring(lot_size) 
+bearentrytt = "🚦 Entry: " + (long_short==1?"🟢 Long @ ":long_short==-1?" 🔴 Short @ ":na) + str.tostring(truncateprice(bearentry, pricedecimals)) 
+  + "\n🛑 DCA/Stop 3: " + str.tostring(truncateprice(dca3in, pricedecimals)) + "\n🩸 Liquidation: " + liqtip2 
+  + "\n🎯 Average Return Target: " + str.tostring(truncateprice(avgtp, pricedecimals)) + "\n🎯 Take Profit 8: " + str.tostring(truncateprice(exin, pricedecimals)) 
+  + "\n💸 Lot Size: " + str.tostring(lot_size) 
+
+
+var label signal = na
+if bullcross
+    label.new(bar_index,low,yloc=yloc.belowbar,text='🚦\nLong',textcolor=color.white, style=label.style_none, tooltip=bullentrytt)
+if bearcross
+    label.new(bar_index,high,yloc=yloc.abovebar,text='🚦\nShort',textcolor=color.white, style=label.style_none, tooltip=bearentrytt)
+var label entry = na
+if state==1 and long_short==1 and barstate.islast
+    entry := label.new(bar_index, y=bullentry, text=str.tostring(truncateprice(bullxprofit*leverage, pricedecimals)) + " %", size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=bullxprofit>0?brightgreen:bullxprofit<0?brightred:color.gray, 
+      tooltip=bullentrytt + "\n⌚ Trade Time: " + str.tostring(tradetime) + " candles" + "\nCurrent Bull Profit: $ " + str.tostring(curbullprof, '#.##') + "\nCurrent Bull Return: " + str.tostring(bullcprofit*leverage, '#.## %') + info)
+    label.delete(entry[1])
+if state==2 and long_short==-1 and barstate.islast
+    entry := label.new(bar_index, y=bearentry, text=str.tostring(truncateprice(bearxprofit*leverage, pricedecimals)) + " %", size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=bearxprofit>0?brightgreen:bearxprofit<0?brightred:color.gray, 
+      tooltip=bearentrytt + "\n⌚ Trade Time: " + str.tostring(tradetime) + " candles" + "\nCurrent Bear Profit: $ " + str.tostring(curbearprof, '#.##') + "\nCurrent Bear Return: " + str.tostring(bearcprofit*leverage, '#.## %') + info)
+    label.delete(entry[1])
+var label tp1 = na
+if state==1 and long_short==1 and barstate.islast
+    tp1 := label.new(bar_index, y=ATRbulltp1 , text=str.tostring(truncateprice(ATRbulltp1 , pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=green, tooltip="🎯: " + str.tostring(truncateprice(ATRbulltp1, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(bullt1profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier, pricedecimals)) + "x "+ "ATR "  + str.tostring(atrPeriod))
+    label.delete(tp1[1])
+if state==2 and long_short==-1 and barstate.islast
+    tp1 := label.new(bar_index, y=ATRbeartp1 , text=str.tostring(truncateprice(ATRbeartp1 , pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=red, tooltip="🎯: " + str.tostring(truncateprice(ATRbeartp1, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(beart1profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier, pricedecimals)) + "x "  + "ATR " + str.tostring(atrPeriod))
+    label.delete(tp1[1])
+var label tp2 = na
+if state==1 and long_short==1 and barstate.islast
+    tp2 := label.new(bar_index, y=ATRbulltp2, text=str.tostring(truncateprice(ATRbulltp2, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close<ATRbulltp2?green:gray,10), tooltip="🎯: " + str.tostring(truncateprice(ATRbulltp2, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(bullt2profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.854, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod))
+    label.delete(tp2[1])
+if state==2 and long_short==-1 and barstate.islast
+    tp2 := label.new(bar_index, y=ATRbeartp2, text=str.tostring(truncateprice(ATRbeartp2, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close>ATRbeartp2?red:gray,10), tooltip="🎯: " + str.tostring(truncateprice(ATRbeartp2, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(beart2profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.854, pricedecimals)) + "x " + "ATR "+ str.tostring(atrPeriod))
+    label.delete(tp2[1])
+var label tp3 = na
+if state==1 and long_short==1 and barstate.islast
+    tp3 := label.new(bar_index, y=ATRbulltp3, text=str.tostring(truncateprice(ATRbulltp3, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close<ATRbulltp3?green:gray,20), tooltip="🎯: " + str.tostring(truncateprice(ATRbulltp3, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(bullt3profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.763, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod))
+    label.delete(tp3[1])
+if state==2 and long_short==-1 and barstate.islast
+    tp3 := label.new(bar_index, y=ATRbeartp3, text=str.tostring(truncateprice(ATRbeartp3, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close>ATRbeartp3?red:gray,20), tooltip="🎯: " + str.tostring(truncateprice(ATRbeartp3, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(beart3profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.763, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod))
+    label.delete(tp3[1])
+var label tp4 = na
+if state==1 and long_short==1 and barstate.islast
+    tp4 := label.new(bar_index, y=ATRbulltp4, text=str.tostring(truncateprice(ATRbulltp4, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close<ATRbulltp4?green:gray,30), tooltip="🎯: " + str.tostring(truncateprice(ATRbulltp4, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(bullt4profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.618, pricedecimals)) + "x " + "ATR "  + str.tostring(atrPeriod))
+    label.delete(tp4[1])
+if state==2 and long_short==-1 and barstate.islast
+    tp4 := label.new(bar_index, y=ATRbeartp4, text=str.tostring(truncateprice(ATRbeartp4, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close>ATRbeartp4?red:gray, 30), tooltip="🎯: " + str.tostring(truncateprice(ATRbeartp4, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(beart4profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.618, pricedecimals)) + "x " + "ATR "  + str.tostring(atrPeriod))
+    label.delete(tp4[1])
+var label tp5 = na
+if state==1 and long_short==1 and barstate.islast
+    tp5 := label.new(bar_index, y=ATRbulltp5, text=str.tostring(truncateprice(ATRbulltp5, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close<ATRbulltp5?green:gray, 40), tooltip="🎯: " + str.tostring(truncateprice(ATRbulltp5, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(bullt5profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.5, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod))
+    label.delete(tp5[1])
+if state==2 and long_short==-1 and barstate.islast
+    tp5 := label.new(bar_index, y=ATRbeartp5, text=str.tostring(truncateprice(ATRbeartp5, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close>ATRbeartp5?red:gray, 40), tooltip="🎯: " + str.tostring(truncateprice(ATRbeartp5, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(beart5profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.5, pricedecimals)) + "x " + "ATR "+ str.tostring(atrPeriod))
+    label.delete(tp5[1])
+var label tp6 = na
+if state==1 and long_short==1 and barstate.islast
+    tp6 := label.new(bar_index, y=ATRbulltp6, text=str.tostring(truncateprice(ATRbulltp6, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close<ATRbulltp6?green:gray, 50), tooltip="🎯: " + str.tostring(truncateprice(ATRbulltp6, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(bullt6profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.382, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod))
+    label.delete(tp6[1])
+if state==2 and long_short==-1 and barstate.islast
+    tp6 := label.new(bar_index, y=ATRbeartp6, text=str.tostring(truncateprice(ATRbeartp6, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close>ATRbeartp6?red:gray,50), tooltip="🎯: " + str.tostring(truncateprice(ATRbeartp6, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(beart6profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.382, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod))
+    label.delete(tp6[1])
+var label tp7 = na
+if state==1 and long_short==1 and barstate.islast
+    tp7 := label.new(bar_index, y=ATRbulltp7, text=str.tostring(truncateprice(ATRbulltp7, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close<ATRbulltp7?green:gray,60), tooltip="🎯: " + str.tostring(truncateprice(ATRbulltp7, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(bullt7profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.236, pricedecimals)) + "x " + "ATR "+ str.tostring(atrPeriod))
+    label.delete(tp7[1])
+if state==2 and long_short==-1 and barstate.islast
+    tp7 := label.new(bar_index, y=ATRbeartp7, text=str.tostring(truncateprice(ATRbeartp7, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close>ATRbeartp7?red:gray,60), tooltip="🎯: " + str.tostring(truncateprice(ATRbeartp7, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(beart7profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.236, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod))
+    label.delete(tp7[1])
+var label tp8 = na
+if state==1 and long_short==1 and barstate.islast
+    tp8 := label.new(bar_index, y=ATRbulltp8, text=str.tostring(truncateprice(ATRbulltp8, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close<ATRbulltp8?green:gray,70), tooltip="🎯: " + str.tostring(truncateprice(ATRbulltp8, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(bullt8profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.146, pricedecimals)) + "x " + "ATR "+ str.tostring(atrPeriod))
+    label.delete(tp8[1])
+if state==2 and long_short==-1 and barstate.islast
+    tp8 := label.new(bar_index, y=ATRbeartp8, text=str.tostring(truncateprice(ATRbeartp8, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(close>ATRbeartp8?red:gray,70), tooltip="🎯: " + str.tostring(truncateprice(ATRbeartp8, pricedecimals)) + "\nProfit: " + str.tostring(truncateprice(beart8profit*leverage, pricedecimals)) + " %\n" + str.tostring(truncateprice(atrMultiplier*0.146, pricedecimals)) + "x " + "ATR "+ str.tostring(atrPeriod))
+    label.delete(tp8[1])
+var label dca1 = na
+if state==1 and long_short==1 and barstate.islast
+    dca1 := label.new(bar_index, y=vwbullse, text=str.tostring(truncateprice(vwbullse, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(color.gray, 40), tooltip="📍: " + str.tostring(truncateprice(vwbullse, pricedecimals)) + "\n-" + str.tostring(truncateprice(atrMultiplier*0.146, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod)) //, tooltip=str.tostring(truncateprice(bullt8profit, pricedecimals)) + " %")
+    label.delete(dca1[1])
+if state==2 and long_short==-1 and barstate.islast
+    dca1 := label.new(bar_index, y=vwbearse, text=str.tostring(truncateprice(vwbearse, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(color.gray, 40), tooltip="📍: " + str.tostring(truncateprice(vwbearse, pricedecimals)) + "\n-" + str.tostring(truncateprice(atrMultiplier*0.146, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod)) //, tooltip=str.tostring(truncateprice(beart8profit, pricedecimals)) + " %")
+    label.delete(dca1[1])
+var label dca2 = na
+if state==1 and long_short==1 and barstate.islast
+    dca2 := label.new(bar_index, y=vwbullse2, text=str.tostring(truncateprice(vwbullse2, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(color.gray, 20), tooltip="📍: " + str.tostring(truncateprice(vwbullse2, pricedecimals)) + "\n-" + str.tostring(truncateprice(atrMultiplier*0.236, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod)) //, tooltip=str.tostring(truncateprice(bullt8profit, pricedecimals)) + " %")
+    label.delete(dca2[1])
+if state==2 and long_short==-1 and barstate.islast
+    dca2 := label.new(bar_index, y=vwbearse2, text=str.tostring(truncateprice(vwbearse2, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(color.gray, 20), tooltip="📍: " + str.tostring(truncateprice(vwbearse2, pricedecimals)) + "\n-" + str.tostring(truncateprice(atrMultiplier*0.236, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod)) //, tooltip=str.tostring(truncateprice(beart8profit, pricedecimals)) + " %")
+    label.delete(dca2[1])
+var label dca3 = na
+if state==1 and long_short==1 and barstate.islast
+    dca3 := label.new(bar_index, y=vwbullse3, text=str.tostring(truncateprice(vwbullse3, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(color.gray, 0), tooltip="📍: " + str.tostring(truncateprice(vwbullse3, pricedecimals)) + "\n-" + str.tostring(truncateprice(atrMultiplier*0.382, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod)) //, tooltip=str.tostring(truncateprice(bullt8profit, pricedecimals)) + " %")
+    label.delete(dca3[1])
+if state==2 and long_short==-1 and barstate.islast
+    dca3 := label.new(bar_index, y=vwbearse3, text=str.tostring(truncateprice(vwbearse3, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(color.gray, 0), tooltip="📍: " + str.tostring(truncateprice(vwbearse3, pricedecimals)) + "\n-" + str.tostring(truncateprice(atrMultiplier*0.382, pricedecimals)) + "x " + "ATR " + str.tostring(atrPeriod)) //, tooltip=str.tostring(truncateprice(beart8profit, pricedecimals)) + " %")
+    label.delete(dca3[1])
+var label cp = na
+if state==1 and long_short==0 and barstate.islast
+    cp := label.new(bar_index, y=high, text=str.tostring(truncateprice(bullxprofit*leverage, pricedecimals)) + " %", size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(green,0), tooltip="🚦 Entry: " + str.tostring(truncateprice(bullentry, pricedecimals)) + "\n💵 Current Profit: $ " + str.tostring(curbullprof, '#.##') + "\n📈 Current Return: " + str.tostring(bullcprofit*leverage, '#.## %') + (i_show_x1?("\n💯 Leverage: " + str.tostring(leverage) + "x"):na) + info) // + (automan=="Auto"?optMAtip:na) + info) //, tooltip=str.tostring(truncateprice(bullt8profit, pricedecimals)) + " %")
+    label.delete(cp[1])
+if state==2 and long_short==0 and barstate.islast
+    cp := label.new(bar_index, y=low, text=str.tostring(truncateprice(bearxprofit*leverage, pricedecimals)) + " %", size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(red,0), tooltip="🚦 Entry: " + str.tostring(truncateprice(bearentry, pricedecimals)) + "\n💵 Current Profit: $ " + str.tostring(curbearprof, '#.##') + "\n📈 Current Return: " + str.tostring(bearcprofit*leverage, '#.## %')+ (i_show_x1?("\n💯 Leverage: " + str.tostring(leverage) + "x"):na) + info) // + (automan=="Auto"?optMAtip:na) + info) //, tooltip=str.tostring(truncateprice(beart8profit, pricedecimals)) + " %")
+    label.delete(cp[1])
+var label liq = na
+if state==1 and long_short==1 and i_show_x1 and barstate.islast
+    liq := label.new(bar_index, y=longLiquidation, text=str.tostring(truncateprice(longLiquidation, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor= longLiquidation < vwbullse3 ? color.yellow : brightred, tooltip=lastlliq)
+    label.delete(liq[1])
+if state==2 and long_short==-1 and i_show_x1 and barstate.islast
+    liq := label.new(bar_index, y=shortLiquidation, text=str.tostring(truncateprice(shortLiquidation, pricedecimals)), size=tradelabsize, style=label.style_label_left, color=color.new(color.white,100), textcolor= shortLiquidation > vwbearse3 ? color.yellow : brightred, tooltip=lastsliq)
+    label.delete(liq[1])
+
+//------------Reset long_short if SL/TP hit during bar------------------------//
+tpreset = true 
+longclose = longtphit or longstophit 
+shortclose = shorttphit or shortstophit
+
+bullstopp = ((vwbullse3 - bullentry)/bullentry)*100
+bearstopp = ((bearentry - vwbearse3)/bearentry)*100
+bulltpp = ((ATRbulltp1 - bullentry)/bullentry)*100
+beartpp = ((bearentry - ATRbeartp1)/bearentry)*100
+
+
+tradesetuptt = "🚦 Entry: " + (long_short==1?"🟢 Long @ ":long_short==-1?" 🔴 Short @ ":na) + str.tostring(truncateprice(entin,pricedecimals)) + 
+  "\n🛑 DCA/Stop 3: " + str.tostring(truncateprice(dca3in, pricedecimals)) +
+  "\n🩸 Liquidation: " + liqtip2 +
+  "\n💰 Take Profit 8: " + str.tostring(truncateprice(exin,pricedecimals)) + 
+  "\n📈 Return: " + str.tostring(truncateprice((long_short==1?bullstopp:long_short==-1?bearstopp:na)*leverage,pricedecimals)) + " %" + 
+  "\n💵 Loss * "+ str.tostring(lot_size) + " lots: $ " + str.tostring(truncateprice(long_short==1?(vwbullse3 - bullentry):long_short==-1?(bearentry - vwbearse3):na,pricedecimals)) +
+  "\n⌚ Trade Time: " + str.tostring(tradetime)
+
+tradesetuptt2 = "🚦 Entry: " + (long_short==1?"🟢 Long @ ":long_short==-1?" 🔴 Short @ ":na) + str.tostring(truncateprice(entin,pricedecimals)) + 
+  "\n🛑 DCA/Stop 3: " + str.tostring(truncateprice(dca3in, pricedecimals)) + 
+  "\n🩸 Liquidation: " + liqtip2 + 
+  "\n💰 Take Profit 8: " + str.tostring(truncateprice(exin,pricedecimals)) + 
+  "\n📈 Return: " + str.tostring(truncateprice((long_short==1?bulltpp:long_short==-1?beartpp:na)*leverage,pricedecimals)) + " %" + 
+  "\n💵 Profit * "+ str.tostring(lot_size) + " lots: $ " + str.tostring(truncateprice(long_short==1?((ATRbulltp1 - bullentry)):long_short==-1?((bearentry - ATRbeartp1)):na,pricedecimals)) +
+  "\n⌚ Trade Time: " + str.tostring(tradetime)
+
+// loss labels
+var label tclose = na
+if longstophit and long_short==1
+    label.new(bar_index,low,yloc=yloc.belowbar,text='❌',textcolor=color.gray, style=label.style_none, tooltip=tradesetuptt)
+if shortstophit and long_short==-1
+    label.new(bar_index,high,yloc=yloc.abovebar,text='❌',textcolor=color.gray, style=label.style_none, tooltip=tradesetuptt)
+
+//  profit labels
+var label tphit = na
+if longtphit and long_short==1 
+    label.new(bar_index,high,yloc=yloc.abovebar,text='💰',textcolor=color.gray, style=label.style_none,  
+      tooltip=tradesetuptt2)
+if shorttphit and long_short==-1 
+    label.new(bar_index,low,yloc=yloc.belowbar,text='💰',textcolor=color.gray, style=label.style_none, 
+      tooltip=tradesetuptt2)
+
+long_short := (long_short == 1 or long_short == 0) and (longclose or longliqhit) and tpreset ? 0 : (long_short == -1 or long_short == 0) and (shortclose or shortliqhit) and tpreset ? 0 : long_short
+
+bgcol2 = state==1 and state[1]==2 ?color.green : state==2 and state[1]==1 ? color.red :na
+bgcolor(color.new(bgcol2,85))
+
+// Add Alert
+alertcondition(bullcross, title="开多", message="开多")
+alertcondition(bearcross, title="开空", message="开空")
+
+
